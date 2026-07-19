@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoxelFree | 3D Stock</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Подключаем Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy } 
+            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } 
+            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // ==========================================
+        // 🔥 ТВОИ ДАННЫЕ FIREBASE (УЖЕ ВСТАВЛЕНЫ)
+        // ==========================================
+        const firebaseConfig = {
+          apiKey: "AIzaSyCRPK3K8rh0dXPUiw9WVjWafdo7-RGEQqQ",
+          authDomain: "voxelfree.firebaseapp.com",
+          databaseURL: "https://voxelfree-default-rtdb.europe-west1.firebasedatabase.app",
+          projectId: "voxelfree",
+          storageBucket: "voxelfree.firebasestorage.app",
+          messagingSenderId: "550842594612",
+          appId: "1:550842594612:web:d88665bda7d60aa8c42161",
+          measurementId: "G-4K2V839NZH"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        let lang = 'ru', isAdmin = false;
+        const t = {
+            en: { title:"VoxelFree", sub:"Synced 3D stock.", search:"Search...", admin:"Admin", out:"Logout", add:"Add Model", pub:"Publish", empty:"No models.", login:"Admin Access", phN:"Name", phA:"Author", phU:"Image URL" },
+            ru: { title:"VoxelFree", sub:"Синхронизируемый сток 3D моделей.", search:"Поиск...", admin:"Вход админа", out:"Выйти", add:"Добавить модель", pub:"Опубликовать", empty:"Моделей нет.", login:"Вход админа", phN:"Название", phA:"Автор", phU:"Ссылка на картинку" }
+        };
+
+        // DOM элементы
+        const grid = document.getElementById('models-grid');
+        const adminPanel = document.getElementById('admin-panel');
+        const loginModal = document.getElementById('login-modal');
+        const searchInput = document.getElementById('search-input');
+
+        // 1. Realtime загрузка моделей
+        const q = query(collection(db, "models"), orderBy("createdAt", "desc"));
+        onSnapshot(q, (snapshot) => {
+            grid.innerHTML = '';
+            if (snapshot.empty) {
+                grid.innerHTML = `<div class="empty-state">${t[lang].empty}</div>`;
+                return;
+            }
+            snapshot.forEach((docSnap) => {
+                const data = docSnap.data();
+                const card = document.createElement('div');
+                card.className = 'card';
+                const isImg = /\.(jpg|jpeg|png|webp)$/i.test(data.url);
+                const bgStyle = isImg ? `background-image:url('${data.url}')` : `background: linear-gradient(135deg, #e0e7ff 0%, #fae8ff 100%);`;
+                
+                card.innerHTML = `
+                    <div class="card-preview" style="${bgStyle}"></div>
+                    <div class="card-body">
+                        <h3>${data.name}</h3>
+                        <span class="author">${data.author}</span>
+                    </div>
+                    ${isAdmin ? `<button class="delete-btn" onclick="window.deleteModel('${docSnap.id}')">×</button>` : ''}
+                `;
+                grid.appendChild(card);
+            });
+        });
+
+        // 2. Добавление модели
+        document.getElementById('add-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!isAdmin) return;
+            const btn = document.getElementById('btn-submit');
+            btn.textContent = '...';
+            try {
+                await addDoc(collection(db, "models"), {
+                    name: document.getElementById('m-name').value.trim(),
+                    author: document.getElementById('m-author').value.trim(),
+                    url: document.getElementById('m-url').value.trim(),
+                    createdAt: Date.now()
+                });
+                e.target.reset();
+            } catch (err) { alert("Ошибка: " + err.message); }
+            btn.textContent = t[lang].pub;
+        });
+
+        // 3. Удаление модели
+        window.deleteModel = async (id) => {
+            if (confirm('Удалить модель?')) {
+                try { await deleteDoc(doc(db, "models", id)); }
+                catch (err) { alert("Ошибка удаления: " + err.message); }
+            }
+        };
+
+        // 4. Авторизация админа
+        document.getElementById('admin-login-btn').onclick = () => loginModal.classList.add('open');
+        document.getElementById('close-modal').onclick = () => loginModal.classList.remove('open');
+        loginModal.onclick = (e) => { if(e.target === loginModal) loginModal.classList.remove('open'); }
+
+        document.getElementById('login-form').onsubmit = async (e) => {
+            e.preventDefault();
+            try {
+                await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
+                loginModal.classList.remove('open');
+            } catch (err) { alert("Ошибка входа: " + err.message); }
+        };
+
+        document.getElementById('logout-btn').onclick = () => signOut(auth);
+
+        onAuthStateChanged(auth, (user) => {
+            isAdmin = !!user;
+            updateUI();
+        });
+
+        function updateUI() {
+            if (isAdmin) {
+                adminPanel.classList.add('visible');
+                document.getElementById('admin-login-btn').style.display = 'none';
+                document.getElementById('logout-btn').style.display = 'inline-block';
+            } else {
+                adminPanel.classList.remove('visible');
+                document.getElementById('admin-login-btn').style.display = 'inline-block';
+                document.getElementById('logout-btn').style.display = 'none';
+            }
+        }
+
+        // 5. Язык и поиск
+        document.getElementById('lang-toggle').onclick = () => {
+            lang = lang === 'en' ? 'ru' : 'en';
+            const c = t[lang];
+            document.getElementById('hero-title').textContent = c.title;
+            document.getElementById('hero-subtitle').textContent = c.sub;
+            searchInput.placeholder = c.search;
+            document.getElementById('admin-login-btn').textContent = c.admin;
+            document.getElementById('logout-btn').textContent = c.out;
+            document.getElementById('admin-title').textContent = c.add;
+            document.getElementById('btn-submit').textContent = c.pub;
+            document.getElementById('login-title').textContent = c.login;
+            document.getElementById('btn-login').textContent = c.login;
+            document.getElementById('m-name').placeholder = c.phN;
+            document.getElementById('m-author').placeholder = c.phA;
+            document.getElementById('m-url').placeholder = c.phU;
+            document.getElementById('email').placeholder = "Email";
+            document.getElementById('password').placeholder = "Password";
+        };
+
+        searchInput.oninput = (e) => {
+            const term = e.target.value.toLowerCase();
+            const cards = grid.querySelectorAll('.card');
+            cards.forEach(card => {
+                const name = card.querySelector('h3').textContent.toLowerCase();
+                card.style.display = name.includes(term) ? 'block' : 'none';
+            });
+        };
+    </script>
+
+    <style>
+        :root { --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #fff; --bg-sec: #f8fafc; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --danger: #ef4444; --shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg-sec); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+        header { background: var(--bg); padding: 1rem 2rem; position: sticky; top: 0; z-index: 100; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); }
+        .logo { font-weight: 800; font-size: 1.5rem; color: var(--primary); cursor: pointer; letter-spacing: -0.5px; }
+        .controls button { background: #fff; border: 1px solid var(--border); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; color: var(--muted); font-weight: 500; transition: all 0.2s ease; margin-left: 10px; font-size: 0.9rem; }
+        .controls button:hover { border-color: var(--primary); color: var(--primary); background: #eff6ff; }
+        .hero { background: linear-gradient(180deg, #eff6ff 0%, #fff 100%); padding: 4rem 1rem; text-align: center; }
+        .hero h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text); }
+        .hero p { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto; }
+        .search-bar { max-width: 500px; margin: 0 auto; padding: 0.8rem 1.5rem; width: 100%; border: 2px solid var(--border); border-radius: 50px; font-size: 1rem; outline: none; transition: 0.3s; box-shadow: var(--shadow); }
+        .search-bar:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; flex: 1; width: 100%; }
+        .admin-panel { background: #fff; border: 2px dashed var(--primary); padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem; display: none; animation: slideDown 0.3s ease; }
+        .admin-panel.visible { display: block; }
+        .form-row { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        .form-row input { flex: 1; padding: 0.7rem; border: 1px solid var(--border); border-radius: 6px; min-width: 200px; font-size: 0.95rem; }
+        .form-row input:focus { border-color: var(--primary); outline: none; }
+        .btn-primary { background: var(--primary); color: #fff; border: none; padding: 0.7rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
+        .card { background: var(--bg); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); transition: all 0.3s ease; position: relative; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px -5px rgba(0,0,0,0.1); border-color: #cbd5e1; }
+        .card-preview { height: 200px; background-size: cover; background-position: center; background-color: #f1f5f9; }
+        .card-body { padding: 1rem; }
+        .card-body h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .author { font-size: 0.85rem; color: var(--muted); display: block; }
+        .delete-btn { position: absolute; top: 10px; right: 10px; background: var(--danger); color: #fff; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: bold; font-size: 1.2rem; opacity: 0; transition: all 0.2s; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(239, 68, 68, 0.4); }
+        .card:hover .delete-btn { opacity: 1; transform: scale(1); }
+        .delete-btn:hover { background: #dc2626; transform: scale(1.1); }
+        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 1000; }
+        .modal.open { display: flex; animation: fadeIn 0.2s ease; }
+        .modal-content { background: #fff; padding: 2rem; border-radius: 16px; width: 90%; max-width: 380px; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        .modal-close { position: absolute; top: 1rem; right: 1rem; cursor: pointer; font-size: 1.5rem; color: var(--muted); line-height: 1; }
+        .modal input { width: 100%; padding: 0.8rem; margin: 0.5rem 0 1.5rem; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; }
+        .modal input:focus { border-color: var(--primary); outline: none; }
+        .empty-state { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 4rem; font-size: 1.1rem; background: #fff; border-radius: 12px; border: 1px dashed var(--border); }
+        footer { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border); margin-top: auto; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo" onclick="window.scrollTo(0,0)">VoxelFree</div>
+        <div class="controls">
+            <button id="lang-toggle">RU / EN</button>
+            <button id="admin-login-btn">Admin Login</button>
+            <button id="logout-btn" style="display:none;">Logout</button>
+        </div>
+    </header>
+    <section class="hero">
+        <h1 id="hero-title">VoxelFree</h1>
+        <p id="hero-subtitle">Синхронизируемый сток 3D моделей.</p>
+        <input type="text" class="search-bar" id="search-input" placeholder="Поиск моделей...">
+    </section>
+    <main class="container">
+        <div id="admin-panel" class="admin-panel">
+            <h2 style="margin-bottom:1rem; color:var(--primary);" id="admin-title">Добавить модель</h2>
+            <form id="add-form">
+                <div class="form-row">
+                    <input type="text" id="m-name" required placeholder="Название">
+                    <input type="text" id="m-author" required placeholder="Автор">
+                </div>
+                <div class="form-row">
+                    <input type="url" id="m-url" required placeholder="Ссылка на картинку">
+                    <button type="submit" class="btn-primary" id="btn-submit">Опубликовать</button>
+                </div>
+            </form>
+        </div>
+        <div id="models-grid" class="grid"></div>
+    </main>
+    <footer>&copy; 2026 VoxelFree. Powered by Firebase & Timeweb.</footer>
+    <div id="login-modal" class="modal">
+        <div class="modal-content">
+            <span id="close-modal" class="modal-close">&times;</span>
+            <h2 style="margin-bottom:1rem;" id="login-title">Вход админа</h2>
+            <form id="login-form">
+                <input type="email" id="email" required placeholder="Email">
+                <input type="password" id="password" required placeholder="Пароль">
+                <button type="submit" class="btn-primary" style="width:100%" id="btn-login">Войти</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
