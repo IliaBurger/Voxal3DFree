@@ -11,38 +11,45 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getFirestore, collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy } 
             from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } 
-            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } 
+            from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
         // ==========================================
-        // 🔥 ТВОИ ДАННЫЕ FIREBASE (УЖЕ ВСТАВЛЕНЫ)
+        // 🔥 ТВОИ КЛЮЧИ FIREBASE
         // ==========================================
         const firebaseConfig = {
           apiKey: "AIzaSyCRPK3K8rh0dXPUiw9WVjWafdo7-RGEQqQ",
           authDomain: "voxelfree.firebaseapp.com",
-          databaseURL: "https://voxelfree-default-rtdb.europe-west1.firebasedatabase.app",
           projectId: "voxelfree",
           storageBucket: "voxelfree.firebasestorage.app",
           messagingSenderId: "550842594612",
-          appId: "1:550842594612:web:d88665bda7d60aa8c42161",
-          measurementId: "G-4K2V839NZH"
+          appId: "1:550842594612:web:d88665bda7d60aa8c42161"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-        const auth = getAuth(app);
+        const storage = getStorage(app);
 
-        let lang = 'ru', isAdmin = false;
+        // ==========================================
+        // 🔐 НАСТРОЙКИ И СОСТОЯНИЕ
+        // ==========================================
+        const ADMIN_PASSWORD = "ilya2026";
+        let isAdmin = false;
+        let lang = 'ru';
+
         const t = {
-            en: { title:"VoxelFree", sub:"Synced 3D stock.", search:"Search...", admin:"Admin", out:"Logout", add:"Add Model", pub:"Publish", empty:"No models.", login:"Admin Access", phN:"Name", phA:"Author", phU:"Image URL" },
-            ru: { title:"VoxelFree", sub:"Синхронизируемый сток 3D моделей.", search:"Поиск...", admin:"Вход админа", out:"Выйти", add:"Добавить модель", pub:"Опубликовать", empty:"Моделей нет.", login:"Вход админа", phN:"Название", phA:"Автор", phU:"Ссылка на картинку" }
+            en: { title:"VoxelFree", sub:"Synced 3D stock.", search:"Search...", admin:"Admin", out:"Logout", add:"+ Add Model", pub:"Save", empty:"No models.", login:"Admin Access" },
+            ru: { title:"VoxelFree", sub:"Синхронизируемый сток 3D моделей.", search:"Поиск...", admin:"Вход админа", out:"Выйти", add:"+ Добавить модель", pub:"Сохранить", empty:"Моделей нет.", login:"Вход админа" }
         };
 
         // DOM элементы
         const grid = document.getElementById('models-grid');
-        const adminPanel = document.getElementById('admin-panel');
         const loginModal = document.getElementById('login-modal');
+        const addModal = document.getElementById('add-modal');
         const searchInput = document.getElementById('search-input');
+        const openAddBtn = document.getElementById('open-add-modal');
+        const logoutBtn = document.getElementById('logout-btn');
+        const loginBtn = document.getElementById('admin-login-btn');
 
         // 1. Realtime загрузка моделей
         const q = query(collection(db, "models"), orderBy("createdAt", "desc"));
@@ -56,149 +63,244 @@
                 const data = docSnap.data();
                 const card = document.createElement('div');
                 card.className = 'card';
-                const isImg = /\.(jpg|jpeg|png|webp)$/i.test(data.url);
-                const bgStyle = isImg ? `background-image:url('${data.url}')` : `background: linear-gradient(135deg, #e0e7ff 0%, #fae8ff 100%);`;
                 
+                const bgStyle = data.previewUrl 
+                    ? `background-image:url('${data.previewUrl}')` 
+                    : `background: linear-gradient(135deg, #e0e7ff 0%, #fae8ff 100%);`;
+
                 card.innerHTML = `
                     <div class="card-preview" style="${bgStyle}"></div>
                     <div class="card-body">
                         <h3>${data.name}</h3>
                         <span class="author">${data.author}</span>
+                        <span class="format-badge">${data.format || '3D'}</span>
                     </div>
-                    ${isAdmin ? `<button class="delete-btn" onclick="window.deleteModel('${docSnap.id}')">×</button>` : ''}
+                    ${isAdmin ? `<button class="delete-btn" data-id="${docSnap.id}" title="Удалить">×</button>` : ''}
                 `;
                 grid.appendChild(card);
             });
+            attachDeleteHandlers();
         });
 
-        // 2. Добавление модели
+        function attachDeleteHandlers() {
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.onclick = () => {
+                    const id = btn.getAttribute('data-id');
+                    if (confirm('Удалить модель?')) {
+                        deleteDoc(doc(db, "models", id))
+                            .catch(err => alert("Ошибка удаления: " + err.message));
+                    }
+                };
+            });
+        }
+
+        // 2. Добавление модели с загрузкой файлов
         document.getElementById('add-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!isAdmin) return;
+
             const btn = document.getElementById('btn-submit');
-            btn.textContent = '...';
+            const originalText = btn.textContent;
+            btn.textContent = 'Загрузка...';
+            btn.disabled = true;
+
             try {
+                const modelFile = document.getElementById('m-file').files[0];
+                const previewFile = document.getElementById('m-preview').files[0];
+                
+                let modelUrl = '';
+                let previewUrl = '';
+
+                if (modelFile) {
+                    const modelRef = ref(storage, `models/${Date.now()}_${modelFile.name}`);
+                    await uploadBytes(modelRef, modelFile);
+                    modelUrl = await getDownloadURL(modelRef);
+                }
+
+                if (previewFile) {
+                    const previewRef = ref(storage, `previews/${Date.now()}_${previewFile.name}`);
+                    await uploadBytes(previewRef, previewFile);
+                    previewUrl = await getDownloadURL(previewRef);
+                }
+
                 await addDoc(collection(db, "models"), {
                     name: document.getElementById('m-name').value.trim(),
                     author: document.getElementById('m-author').value.trim(),
-                    url: document.getElementById('m-url').value.trim(),
+                    format: document.getElementById('m-format').value,
+                    category: document.getElementById('m-category').value,
+                    icon: document.getElementById('m-icon').value.trim(),
+                    modelUrl: modelUrl,
+                    previewUrl: previewUrl,
                     createdAt: Date.now()
                 });
+
                 e.target.reset();
-            } catch (err) { alert("Ошибка: " + err.message); }
-            btn.textContent = t[lang].pub;
+                addModal.classList.remove('open');
+                resetFileInputs();
+                
+            } catch (err) {
+                alert("Ошибка загрузки: " + err.message);
+                console.error(err);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
         });
 
-        // 3. Удаление модели
-        window.deleteModel = async (id) => {
-            if (confirm('Удалить модель?')) {
-                try { await deleteDoc(doc(db, "models", id)); }
-                catch (err) { alert("Ошибка удаления: " + err.message); }
+        // 3. Локальная авторизация
+        loginBtn.onclick = () => loginModal.classList.add('open');
+        document.getElementById('close-login').onclick = () => loginModal.classList.remove('open');
+        loginModal.onclick = (e) => { if(e.target === loginModal) loginModal.classList.remove('open'); };
+
+        document.getElementById('login-form').onsubmit = (e) => {
+            e.preventDefault();
+            if (document.getElementById('admin-pass').value === ADMIN_PASSWORD) {
+                isAdmin = true;
+                updateUIState();
+                loginModal.classList.remove('open');
+            } else {
+                alert('Неверный пароль!');
             }
         };
 
-        // 4. Авторизация админа
-        document.getElementById('admin-login-btn').onclick = () => loginModal.classList.add('open');
-        document.getElementById('close-modal').onclick = () => loginModal.classList.remove('open');
-        loginModal.onclick = (e) => { if(e.target === loginModal) loginModal.classList.remove('open'); }
-
-        document.getElementById('login-form').onsubmit = async (e) => {
-            e.preventDefault();
-            try {
-                await signInWithEmailAndPassword(auth, document.getElementById('email').value, document.getElementById('password').value);
-                loginModal.classList.remove('open');
-            } catch (err) { alert("Ошибка входа: " + err.message); }
+        logoutBtn.onclick = () => {
+            isAdmin = false;
+            updateUIState();
         };
 
-        document.getElementById('logout-btn').onclick = () => signOut(auth);
-
-        onAuthStateChanged(auth, (user) => {
-            isAdmin = !!user;
-            updateUI();
-        });
-
-        function updateUI() {
+        function updateUIState() {
             if (isAdmin) {
-                adminPanel.classList.add('visible');
-                document.getElementById('admin-login-btn').style.display = 'none';
-                document.getElementById('logout-btn').style.display = 'inline-block';
+                openAddBtn.style.display = 'block';
+                loginBtn.style.display = 'none';
+                logoutBtn.style.display = 'inline-block';
             } else {
-                adminPanel.classList.remove('visible');
-                document.getElementById('admin-login-btn').style.display = 'inline-block';
-                document.getElementById('logout-btn').style.display = 'none';
+                openAddBtn.style.display = 'none';
+                loginBtn.style.display = 'inline-block';
+                logoutBtn.style.display = 'none';
             }
         }
 
-        // 5. Язык и поиск
+        // Управление модалкой добавления
+        openAddBtn.onclick = () => addModal.classList.add('open');
+        document.getElementById('close-add').onclick = () => addModal.classList.remove('open');
+        document.getElementById('cancel-add').onclick = () => addModal.classList.remove('open');
+        addModal.onclick = (e) => { if(e.target === addModal) addModal.classList.remove('open'); };
+
+        // === ИСПРАВЛЕНИЕ: Обработка кликов по зонам загрузки файлов ===
+        function setupFileUpload(boxSelector, inputId, labelSelector) {
+            const box = document.querySelector(boxSelector);
+            const input = document.getElementById(inputId);
+            const label = box.querySelector(labelSelector);
+
+            // При клике на рамку -> клик на скрытый input
+            box.onclick = (e) => {
+                e.preventDefault(); // Предотвращаем отправку формы если внутри form
+                input.click();
+            };
+
+            // При выборе файла -> меняем текст лейбла
+            input.onchange = function() {
+                if(this.files.length > 0) {
+                    label.innerHTML = `✅ ${this.files[0].name}`;
+                    label.style.color = '#16a34a';
+                }
+            };
+        }
+
+        // Настраиваем обе зоны загрузки
+        setupFileUpload('.file-upload-box.model-zone', 'm-file', '.file-upload-label');
+        setupFileUpload('.file-upload-box.preview-zone', 'm-preview', '.file-upload-label');
+
+        function resetFileInputs() {
+            const labels = document.querySelectorAll('.file-upload-label');
+            labels[0].innerHTML = '📁 Выберите файл';
+            labels[0].style.color = 'var(--primary)';
+            labels[1].innerHTML = '️ Выберите файл превью';
+            labels[1].style.color = 'var(--primary)';
+        }
+
+        // Поиск и язык
+        searchInput.oninput = (e) => {
+            const term = e.target.value.toLowerCase();
+            grid.querySelectorAll('.card').forEach(card => {
+                const name = card.querySelector('h3')?.textContent.toLowerCase() || '';
+                card.style.display = name.includes(term) ? 'block' : 'none';
+            });
+        };
+
         document.getElementById('lang-toggle').onclick = () => {
             lang = lang === 'en' ? 'ru' : 'en';
             const c = t[lang];
             document.getElementById('hero-title').textContent = c.title;
             document.getElementById('hero-subtitle').textContent = c.sub;
             searchInput.placeholder = c.search;
-            document.getElementById('admin-login-btn').textContent = c.admin;
-            document.getElementById('logout-btn').textContent = c.out;
-            document.getElementById('admin-title').textContent = c.add;
+            loginBtn.textContent = c.admin;
+            logoutBtn.textContent = c.out;
+            openAddBtn.textContent = c.add;
             document.getElementById('btn-submit').textContent = c.pub;
             document.getElementById('login-title').textContent = c.login;
-            document.getElementById('btn-login').textContent = c.login;
-            document.getElementById('m-name').placeholder = c.phN;
-            document.getElementById('m-author').placeholder = c.phA;
-            document.getElementById('m-url').placeholder = c.phU;
-            document.getElementById('email').placeholder = "Email";
-            document.getElementById('password').placeholder = "Password";
+            document.getElementById('add-modal-title').innerHTML = `<span style="color:var(--primary); font-size:1.5rem;">+</span> ${c.add.replace('+ ', '')}`;
         };
 
-        searchInput.oninput = (e) => {
-            const term = e.target.value.toLowerCase();
-            const cards = grid.querySelectorAll('.card');
-            cards.forEach(card => {
-                const name = card.querySelector('h3').textContent.toLowerCase();
-                card.style.display = name.includes(term) ? 'block' : 'none';
-            });
-        };
     </script>
 
     <style>
         :root { --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #fff; --bg-sec: #f8fafc; --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --danger: #ef4444; --shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background: var(--bg-sec); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+        
         header { background: var(--bg); padding: 1rem 2rem; position: sticky; top: 0; z-index: 100; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); }
-        .logo { font-weight: 800; font-size: 1.5rem; color: var(--primary); cursor: pointer; letter-spacing: -0.5px; }
-        .controls button { background: #fff; border: 1px solid var(--border); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; color: var(--muted); font-weight: 500; transition: all 0.2s ease; margin-left: 10px; font-size: 0.9rem; }
+        .logo { font-weight: 800; font-size: 1.5rem; color: var(--primary); cursor: pointer; }
+        .controls button { background: #fff; border: 1px solid var(--border); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; color: var(--muted); font-weight: 500; transition: all 0.2s ease; margin-left: 10px; }
         .controls button:hover { border-color: var(--primary); color: var(--primary); background: #eff6ff; }
+        
         .hero { background: linear-gradient(180deg, #eff6ff 0%, #fff 100%); padding: 4rem 1rem; text-align: center; }
-        .hero h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; color: var(--text); }
-        .hero p { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; max-width: 600px; margin-left: auto; margin-right: auto; }
-        .search-bar { max-width: 500px; margin: 0 auto; padding: 0.8rem 1.5rem; width: 100%; border: 2px solid var(--border); border-radius: 50px; font-size: 1rem; outline: none; transition: 0.3s; box-shadow: var(--shadow); }
-        .search-bar:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        .hero h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; }
+        .hero p { color: var(--muted); font-size: 1.1rem; margin-bottom: 2rem; }
+        .search-bar { max-width: 500px; margin: 0 auto; padding: 0.8rem 1.5rem; width: 100%; border: 2px solid var(--border); border-radius: 50px; font-size: 1rem; outline: none; transition: 0.3s; }
+        .search-bar:focus { border-color: var(--primary); }
+        
         .container { max-width: 1200px; margin: 0 auto; padding: 2rem; flex: 1; width: 100%; }
-        .admin-panel { background: #fff; border: 2px dashed var(--primary); padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem; display: none; animation: slideDown 0.3s ease; }
-        .admin-panel.visible { display: block; }
-        .form-row { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
-        .form-row input { flex: 1; padding: 0.7rem; border: 1px solid var(--border); border-radius: 6px; min-width: 200px; font-size: 0.95rem; }
-        .form-row input:focus { border-color: var(--primary); outline: none; }
+        
+        .admin-controls { display: flex; gap: 1rem; margin-bottom: 2rem; justify-content: flex-end; }
         .btn-primary { background: var(--primary); color: #fff; border: none; padding: 0.7rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: 600; transition: 0.2s; }
-        .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+        .btn-primary:hover { background: var(--primary-hover); }
+        
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
         .card { background: var(--bg); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); transition: all 0.3s ease; position: relative; }
-        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px -5px rgba(0,0,0,0.1); border-color: #cbd5e1; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 20px -5px rgba(0,0,0,0.1); }
         .card-preview { height: 200px; background-size: cover; background-position: center; background-color: #f1f5f9; }
-        .card-body { padding: 1rem; }
+        .card-body { padding: 1rem; position: relative; }
         .card-body h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .author { font-size: 0.85rem; color: var(--muted); display: block; }
-        .delete-btn { position: absolute; top: 10px; right: 10px; background: var(--danger); color: #fff; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-weight: bold; font-size: 1.2rem; opacity: 0; transition: all 0.2s; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 5px rgba(239, 68, 68, 0.4); }
-        .card:hover .delete-btn { opacity: 1; transform: scale(1); }
-        .delete-btn:hover { background: #dc2626; transform: scale(1.1); }
+        .author { font-size: 0.85rem; color: var(--muted); display: block; margin-bottom: 0.5rem; }
+        .format-badge { position: absolute; bottom: 1rem; right: 1rem; background: #eff6ff; color: var(--primary); padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        
+        .delete-btn { position: absolute; top: 10px; right: 10px; background: var(--danger); color: #fff; border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; opacity: 0; transition: 0.2s; z-index: 10; }
+        .card:hover .delete-btn { opacity: 1; }
+        
+        /* Модальные окна */
         .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 1000; }
         .modal.open { display: flex; animation: fadeIn 0.2s ease; }
-        .modal-content { background: #fff; padding: 2rem; border-radius: 16px; width: 90%; max-width: 380px; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        .modal-content { background: #fff; padding: 2rem; border-radius: 16px; width: 90%; max-width: 500px; position: relative; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); max-height: 90vh; overflow-y: auto; }
         .modal-close { position: absolute; top: 1rem; right: 1rem; cursor: pointer; font-size: 1.5rem; color: var(--muted); line-height: 1; }
-        .modal input { width: 100%; padding: 0.8rem; margin: 0.5rem 0 1.5rem; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; }
-        .modal input:focus { border-color: var(--primary); outline: none; }
-        .empty-state { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 4rem; font-size: 1.1rem; background: #fff; border-radius: 12px; border: 1px dashed var(--border); }
-        footer { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border); margin-top: auto; }
-        @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* Форма добавления */
+        .form-group { margin-bottom: 1.2rem; }
+        .form-label { display: block; font-size: 0.9rem; font-weight: 500; margin-bottom: 0.5rem; color: var(--text); }
+        .form-input, .form-select { width: 100%; padding: 0.7rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem; outline: none; transition: 0.2s; }
+        .form-input:focus, .form-select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+        
+        .file-upload-box { border: 2px dashed var(--primary); border-radius: 8px; padding: 1.5rem; text-align: center; background: #f8fafc; cursor: pointer; transition: 0.2s; }
+        .file-upload-box:hover { background: #eff6ff; }
+        .file-upload-box input[type="file"] { display: none; }
+        .file-upload-label { color: var(--primary); font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+        .file-hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; display: block; }
+        
+        .modal-actions { display: flex; gap: 1rem; justify-content: flex-end; margin-top: 2rem; }
+        .btn-secondary { background: #f1f5f9; color: var(--text); border: none; padding: 0.7rem 1.5rem; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .btn-secondary:hover { background: #e2e8f0; }
+        
+        .empty-state { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 4rem; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
 </head>
@@ -211,36 +313,105 @@
             <button id="logout-btn" style="display:none;">Logout</button>
         </div>
     </header>
+
     <section class="hero">
         <h1 id="hero-title">VoxelFree</h1>
         <p id="hero-subtitle">Синхронизируемый сток 3D моделей.</p>
         <input type="text" class="search-bar" id="search-input" placeholder="Поиск моделей...">
     </section>
+
     <main class="container">
-        <div id="admin-panel" class="admin-panel">
-            <h2 style="margin-bottom:1rem; color:var(--primary);" id="admin-title">Добавить модель</h2>
-            <form id="add-form">
-                <div class="form-row">
-                    <input type="text" id="m-name" required placeholder="Название">
-                    <input type="text" id="m-author" required placeholder="Автор">
-                </div>
-                <div class="form-row">
-                    <input type="url" id="m-url" required placeholder="Ссылка на картинку">
-                    <button type="submit" class="btn-primary" id="btn-submit">Опубликовать</button>
-                </div>
-            </form>
+        <div class="admin-controls">
+            <button id="open-add-modal" class="btn-primary" style="display:none;">+ Добавить модель</button>
         </div>
+        
         <div id="models-grid" class="grid"></div>
     </main>
-    <footer>&copy; 2026 VoxelFree. Powered by Firebase & Timeweb.</footer>
+
+    <!-- Модалка входа -->
     <div id="login-modal" class="modal">
-        <div class="modal-content">
-            <span id="close-modal" class="modal-close">&times;</span>
+        <div class="modal-content" style="max-width: 380px;">
+            <span id="close-login" class="modal-close">&times;</span>
             <h2 style="margin-bottom:1rem;" id="login-title">Вход админа</h2>
             <form id="login-form">
-                <input type="email" id="email" required placeholder="Email">
-                <input type="password" id="password" required placeholder="Пароль">
-                <button type="submit" class="btn-primary" style="width:100%" id="btn-login">Войти</button>
+                <div class="form-group">
+                    <input type="password" id="admin-pass" class="form-input" required placeholder="Пароль">
+                </div>
+                <button type="submit" class="btn-primary" style="width:100%">Войти</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Модалка добавления модели -->
+    <div id="add-modal" class="modal">
+        <div class="modal-content">
+            <span id="close-add" class="modal-close">&times;</span>
+            <h2 style="margin-bottom:1.5rem; display:flex; align-items:center; gap:0.5rem;" id="add-modal-title">
+                <span style="color:var(--primary); font-size:1.5rem;">+</span> Добавить модель
+            </h2>
+            
+            <form id="add-form">
+                <div class="form-group">
+                    <label class="form-label">Название модели *</label>
+                    <input type="text" id="m-name" class="form-input" required placeholder="Например: Frog(Лягушка)">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Автор *</label>
+                    <input type="text" id="m-author" class="form-input" required placeholder="Например: Ilia Official">
+                </div>
+                
+                <div class="form-row" style="display:flex; gap:1rem;">
+                    <div class="form-group" style="flex:1;">
+                        <label class="form-label">Формат</label>
+                        <select id="m-format" class="form-select">
+                            <option value="GLB">GLB</option>
+                            <option value="OBJ">OBJ</option>
+                            <option value="FBX">FBX</option>
+                            <option value="STL">STL</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex:1;">
+                        <label class="form-label">Категория</label>
+                        <select id="m-category" class="form-select">
+                            <option value="Природа">Природа</option>
+                            <option value="Архитектура">Архитектура</option>
+                            <option value="Персонажи">Персонажи</option>
+                            <option value="Техника">Техника</option>
+                            <option value="Мебель">Мебель</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Иконка (Font Awesome)</label>
+                    <input type="text" id="m-icon" class="form-input" placeholder="fa-cube" value="fa-cube">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label" style="color:var(--primary);">↑ Загрузить 3D-модель *</label>
+                    <!-- ДОБАВЛЕН КЛАСС model-zone ДЛЯ JS -->
+                    <div class="file-upload-box model-zone">
+                        <input type="file" id="m-file" accept=".glb,.obj,.fbx,.stl" required>
+                        <div class="file-upload-label">📁 Выберите файл</div>
+                        <span class="file-hint">Поддерживаются: GLB, OBJ, FBX, STL<br>Файлы загружаются в облако автоматически</span>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Превью (изображение)</label>
+                    <!-- ДОБАВЛЕН КЛАСС preview-zone ДЛЯ JS -->
+                    <div class="file-upload-box preview-zone" style="padding: 0.8rem;">
+                        <input type="file" id="m-preview" accept=".jpg,.png,.gif">
+                        <div class="file-upload-label" style="font-size: 0.9rem;">️ Выберите файл превью</div>
+                        <span class="file-hint">JPG, PNG, GIF (опционально)</span>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="cancel-add">Отмена</button>
+                    <button type="submit" class="btn-primary" id="btn-submit">Сохранить</button>
+                </div>
             </form>
         </div>
     </div>
